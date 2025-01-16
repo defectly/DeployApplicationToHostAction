@@ -1,0 +1,71 @@
+name: Deploy application to host
+
+on:
+  workflow_call:
+    inputs:
+      host:
+        required: true
+        type: string
+      port:
+        required: true
+        type: string
+      user:
+        required: true
+        type: string
+      app-dir:
+        required: true
+        type: string
+      tmp-dir:
+        required: true
+        type: string
+      pre-copy:
+        required: true
+        type: string
+      post-copy:
+        required: true
+        type: string
+    secrets:
+      private-key:
+        required: true
+
+jobs:
+  create-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+     - name: Configure SSH
+       run: |
+          mkdir -p ~/.ssh/
+          echo "${{secrets.private-key}}" > ~/.ssh/targetServer.key
+          chmod 600 ~/.ssh/targetServer.key
+          cat >>~/.ssh/config <<END
+          Host targetServer
+            HostName ${{inputs.host}}
+            Port ${{inputs.port}}
+            User ${{inputs.user}}
+            IdentityFile ~/.ssh/targetServer.key
+            StrictHostKeyChecking no
+          END
+                 
+     - name: Download artifact
+       uses: actions/download-artifact@v3
+       with:
+         name: build
+
+     - name: Pack files
+       run: >
+          tar --ignore-failed-read --exclude=./publish.tgz -czvf publish.tgz .
+          
+     - name: Copy files to target
+       run: |
+          ssh targetServer 'mkdir -p ${{inputs.tmp-dir}}/unpacked/ && mkdir -p ${{inputs.app-dir}}'
+          scp -r publish.tgz targetServer:${{inputs.tmp-dir}}
+         
+     - name: Unpack files and restart service
+       run: >
+          ssh targetServer '\
+           cd ${{inputs.tmp-dir}} && \
+           ${{inputs.pre-copy}} && \
+           tar -xvf publish.tgz -C "${{inputs.tmp-dir}}/unpacked/"  && \
+           rsync -a "${{inputs.tmp-dir}}/unpacked/" ${{inputs.app-dir}} && \
+           rm -r publish.tgz "${{inputs.tmp-dir}}/unpacked/" && \
+           ${{inputs.post-copy}}'
